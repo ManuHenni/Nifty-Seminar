@@ -200,22 +200,19 @@ class Measurement_Devices:
         LOS_starts, LOS_ends = build_LOSs(doas_pos, refl_pos, 1)
         R = ift.LOSResponse(position_space, starts=LOS_starts, ends=LOS_ends)
         signal_response = R(signal)
-        #print(signal_response.domain)
+
         # Specify noise
         data_space = R.target
         noise = .001
         N = ift.ScalingOperator(data_space, noise)
-        #print(N.domain)
-        #print("Field-domain:",ift.DomainTuple.make(position_space))
 
         # Generate mock signal and data
+        # Ich möchte normalized_field als mock field benutzen.
         #mock_position = ift.from_random(signal_response.domain, 'normal')
         #mock_position = ift.Field(ift.DomainTuple.make(position_space), val=normalized_field)
-        #mock_position = ift.MultiField(signal_response.domain, val=(normalized_field, R))
+        mock_position = ift.MultiField(signal_response.domain, val=normalized_field)
+        #mock_position = ift.makeField(signal_response.domain, {"asperity:": (0.5,0.4) ,"bar": normalized_field})
 
-        mock_position = ift.makeField(signal_response.domain, {"asperity:": (0.5,0.4) ,"bar": normalized_field})
-
-        print(mock_position.domain)
         plot = ift.Plot()
         plot.add(signal(mock_position), title='Ground Truth', zmin=0, zmax=1)
         plot.output()
