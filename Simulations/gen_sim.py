@@ -70,9 +70,12 @@ Measurement_devices = Measurement_Devices(DOASs, REFLs, vol)
 lines = Measurement_devices.return_plottables()
 DOAS_positions, REFL_positions = Measurement_devices.return_positions()
 measurements = Measurement_devices.measure()
-Measurement_devices.ift_inversion_approach()
+pwrspc_init, mean_rslt, pwrspec_rslt, std_rslt = Measurement_devices.IFT8_inversion()
 
-
+print(pwrspc_init)
+print(pwrspec_rslt)
+print(mean_rslt)
+print(std_rslt)
 
 #plotting
 plot_data = [go.Volume(

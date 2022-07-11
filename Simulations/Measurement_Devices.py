@@ -6,7 +6,7 @@ from Line import Line
 import math as m
 import sys
 import numpy as np
-import nifty7 as ift
+import nifty8 as ift
 import plotly.graph_objects as go
 
 
@@ -154,23 +154,31 @@ class Measurement_Devices:
         def diff(x):
             pass
 
-    def ift_inversion_approach(self):
 
+    def IFT8_inversion(self):
+        try:
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+            master = comm.Get_rank() == 0
+        except ImportError:
+            comm = None
+            master = True
         def build_LOSs(doas_pos, refl_pos, normalization):
             LOS_starts = [[], []]
             LOS_ends = [[], []]
             for doas in doas_pos:
                 for i in range(len(refl_pos)):
-                    LOS_starts[0].append(doas[0]/normalization)
-                    LOS_starts[1].append(doas[1]/normalization)
-                    LOS_ends[0].append(refl_pos[i][0]/normalization)
-                    LOS_ends[1].append(refl_pos[i][1]/normalization)
+                    LOS_starts[0].append(doas[0] / normalization)
+                    LOS_starts[1].append(doas[1] / normalization)
+                    LOS_ends[0].append(refl_pos[i][0] / normalization)
+                    LOS_ends[1].append(refl_pos[i][1] / normalization)
             return LOS_starts, LOS_ends
 
-        filename = "testing_field_inversion_{}.png"
-        position_space = ift.RGSpace((self.simulated_field.shape[0], self.simulated_field.shape[1]), distances=(1, 1))
-        normalized_field=(np.sum(self.simulated_field, axis=2)/ np.max(np.sum(self.simulated_field, axis=2)))
-
+        filename = "./output_ift_inversion/testing_field_inversion_{}.png"
+        position_space = ift.RGSpace((self.simulated_field.shape[0], self.simulated_field.shape[1]))
+        normalized_field = (np.sum(self.simulated_field, axis=2) / np.max(np.sum(self.simulated_field, axis=2)))
+        padder = ift.FieldZeroPadder(position_space, [i * 2 for i in position_space.shape], central=True).adjoint
+        print(padder.domain)
         #  For a detailed showcase of the effects the parameters
         #  of the CorrelatedField model have on the generated fields,
         #  see 'getting_started_4_CorrelatedFields.ipynb'.
@@ -179,45 +187,48 @@ class Measurement_Devices:
             'offset_mean': 0,
             'offset_std': (1e-3, 1e-6),
             # Amplitude of field fluctuations
-            'fluctuations': (1., 0.8),  # 1.0, 1e-2
+            'fluctuations': (1., 0.7),  # 1.0, 1e-2
             # Exponent of power law power spectrum component
-            'loglogavgslope': (-3., 1),  # -6.0, 1
+            'loglogavgslope': (-3., 1),  # -6.0, 1   (mean, std)
             # Amplitude of integrated Wiener process power spectrum component
-            'flexibility': (2, 1.),  # 1.0, 0.5
+            'flexibility': (0.8, 0.1),  # 1.0, 0.5
             # How ragged the integrated Wiener process component is
             'asperity': (0.5, 0.4)  # 0.1, 0.5
         }
 
-        correlated_field = ift.SimpleCorrelatedField(position_space, **args)
+        correlated_field = ift.SimpleCorrelatedField(padder.domain, **args)
         pspec = correlated_field.power_spectrum
+        print(correlated_field.domain)
+        # ift.random.push_sseq_from_seed(np.random.randint(0,100))
 
         # Apply a nonlinearity
-        signal = ift.sigmoid(correlated_field) #das hier sollte ich ändern!
+        # signal = ift.sigmoid(correlated_field) #das hier sollte ich ändern!
+        signal = ift.log(ift.Adder(1., domain=position_space)(ift.exp(padder(correlated_field))))
 
         # Build the line-of-sight response and define signal response
         doas_pos = self.return_positions(dim="2D")[0]
         refl_pos = self.return_positions(dim="2D")[1]
-        LOS_starts, LOS_ends = build_LOSs(doas_pos, refl_pos, 1)
+        LOS_starts, LOS_ends = build_LOSs(doas_pos, refl_pos, 30)
         R = ift.LOSResponse(position_space, starts=LOS_starts, ends=LOS_ends)
         signal_response = R(signal)
+
 
         # Specify noise
         data_space = R.target
         noise = .001
-        N = ift.ScalingOperator(data_space, noise)
+        N = ift.ScalingOperator(data_space, noise, np.float64)
 
         # Generate mock signal and data
         # Ich möchte normalized_field als mock field benutzen.
-        #mock_position = ift.from_random(signal_response.domain, 'normal')
-        #mock_position = ift.Field(ift.DomainTuple.make(position_space), val=normalized_field)
-        mock_position = ift.MultiField(signal_response.domain, val=normalized_field)
-        #mock_position = ift.makeField(signal_response.domain, {"asperity:": (0.5,0.4) ,"bar": normalized_field})
+        # mock_position = ift.from_random(signal_response.domain, 'normal')
+        ground_truth = ift.makeField(position_space, normalized_field)
+        # ground_truth = signal(ift.from_random(signal.domain))
 
-        plot = ift.Plot()
-        plot.add(signal(mock_position), title='Ground Truth', zmin=0, zmax=1)
-        plot.output()
+        # plot = ift.Plot()
+        # plot.add(R(ground_truth), title='Ground Truth', zmin=0, zmax=1)
+        # plot.output()
 
-        data = mock_position + N.draw_sample_with_dtype(dtype=np.float64)
+        data = R(ground_truth) + N.draw_sample()
 
         # Minimization parameters
         ic_sampling = ift.AbsDeltaEnergyController(name="Sampling (linear)",
@@ -230,70 +241,51 @@ class Measurement_Devices:
         minimizer_sampling = ift.NewtonCG(ic_sampling_nl)
 
         # Set up likelihood energy and information Hamiltonian
-        likelihood_energy = (ift.GaussianEnergy(mean=data, inverse_covariance=N.inverse) @ signal_response)
+        likelihood_energy = (ift.GaussianEnergy(data, inverse_covariance=N.inverse) @ signal_response)
         H = ift.StandardHamiltonian(likelihood_energy, ic_sampling)
+
 
         initial_mean = ift.MultiField.full(H.domain, 0.)
         mean = initial_mean
 
         plot = ift.Plot()
-        plot.add(signal(mock_position), title='Ground Truth', zmin=0, zmax=1)
+        plot.add(ground_truth, title='Ground Truth', zmin=0, zmax=1)
         plot.add(R.adjoint_times(data), title='Data')
-        plot.add([pspec.force(mock_position)], title='Power Spectrum')
+        plot.add([pspec.force(mean)], title='Power Spectrum')
         plot.output(ny=1, nx=3, xsize=24, ysize=6, name=filename.format("setup"))
 
         # number of samples used to estimate the KL
-        N_samples = 10
+        # Minimize KL
+        n_iterations = 6
+        n_samples = lambda iiter: 10 if iiter < 5 else 20
+        samples = ift.optimize_kl(likelihood_energy, n_iterations, n_samples,
+                                  minimizer, ic_sampling, minimizer_sampling,
+                                  plottable_operators={"signal": (signal, dict(vmin=0, vmax=1)),
+                                                       "power spectrum": pspec},
+                                  ground_truth_position=None,
+                                  output_directory="output_ift_inversion",
+                                  overwrite=True, comm=comm)
 
-        # Draw new samples to approximate the KL six times
-        for i in range(6):
-            if i == 5:
-                # Double the number of samples in the last step for better statistics
-                N_samples = 2 * N_samples
-            # Draw new samples and minimize KL
-            KL = ift.GeoMetricKL(mean, H, N_samples, minimizer_sampling, True)
-            KL, convergence = minimizer(KL)
-            mean = KL.position
-            ift.extra.minisanity(data, lambda x: N.inverse, signal_response,
-                                 KL.position, KL.samples)
-
-            # Plot current reconstruction
-            plot = ift.Plot()
-            plot.add(signal(KL.position), title="Latent mean", zmin=0, zmax=1)
-            plot.add([pspec.force(KL.position + ss) for ss in KL.samples],
-                     title="Samples power spectrum")
-            plot.output(ny=1, ysize=6, xsize=16,
-                        name=filename.format("loop_{:02d}".format(i)))
-
-        sc = ift.StatCalculator()
-        for sample in KL.samples:
-            sc.add(signal(sample + KL.position))
+        if True:
+            # Load result from disk. May be useful for long inference runs, where
+            # inference and posterior analysis are split into two steps
+            samples = ift.ResidualSampleList.load("output_ift_inversion/pickle/last", comm=comm)
 
         # Plotting
         filename_res = filename.format("results")
         plot = ift.Plot()
-        plot.add(sc.mean, title="Posterior Mean", zmin=0, zmax=1)
-        plot.add(ift.sqrt(sc.var), title="Posterior Standard Deviation")
+        mean, var = samples.sample_stat(signal)
+        plot.add(mean, title="Posterior Mean", vmin=0, vmax=1)
+        plot.add(var.sqrt(), title="Posterior Standard Deviation", vmin=0)
 
-        powers = [pspec.force(s + KL.position) for s in KL.samples]
-        sc = ift.StatCalculator()
-        for pp in powers:
-            sc.add(pp.log())
-        plot.add(
-            powers + [pspec.force(mock_position),
-                      pspec.force(KL.position), sc.mean.exp()],
-            title="Sampled Posterior Power Spectrum",
-            linewidth=[1.] * len(powers) + [3., 3., 3.],
-            label=[None] * len(powers) + ['Ground truth', 'Posterior latent mean', 'Posterior mean'])
-        plot.output(ny=1, nx=3, xsize=24, ysize=6, name=filename_res)
-        print("Saved results as '{}'.".format(filename_res))
-
-
-
-
-
-
-
+        nsamples = samples.n_samples
+        logspec = pspec.log()
+        #plot.add(list(samples.iterator(pspec)) +
+        #         [pspec.force(ground_truth), samples.average(logspec).exp()],
+        #         title="Sampled Posterior Power Spectrum",
+        #         linewidth=[1.] * nsamples + [3., 3.],
+        #         label=[None] * nsamples + ['Ground truth', 'Posterior mean'])
+        return pspec.force(ground_truth).val, mean.val, samples.average(logspec).exp().val, var.sqrt().val
 
 
 
