@@ -16,7 +16,7 @@ from Measurement_Devices import *
 import matplotlib
 matplotlib.use("TkAgg")
 
-def generate_random_field(x_len, y_len, z_len, bubble_amount=25, bubble_scale=4):
+def generate_random_field(x_len, y_len, z_len, bubble_amount=15, bubble_scale=4):
     # Generate nicely looking random 3D-field
     np.random.seed(np.random.randint(0,1000))
     X, Y, Z = np.mgrid[:x_len, :y_len, :z_len]
@@ -30,7 +30,7 @@ def generate_random_field(x_len, y_len, z_len, bubble_amount=25, bubble_scale=4)
     vol /= vol.max()
     return vol, X, Y, Z
 
-def generate_centered_gauss(x_len, y_len, z_len, bubble_amount=1, bubble_scale=4):
+def generate_centered_gauss(x_len, y_len, z_len, bubble_amount=1, bubble_scale=3):
     # Generate nicely looking random 3D-field
     X, Y, Z = np.mgrid[:x_len, :y_len, :z_len]
     vol = np.zeros((x_len, y_len, z_len))
@@ -45,8 +45,11 @@ def generate_centered_gauss(x_len, y_len, z_len, bubble_amount=1, bubble_scale=4
 
 vol, X_field, Y_field, Z_field = generate_random_field(30,30,21)
 #vol, X_field, Y_field, Z_field = generate_centered_gauss(30,30,21)
-contour = np.sum(vol, axis=2)
-
+dimension = "2D"
+ground_truth_field = np.sum(vol, axis=2)
+normalized_ground_truth_field = (np.sum(vol, axis=2) / np.max(np.sum(vol, axis=2)))
+plt.imshow(normalized_ground_truth_field, cmap="inferno")
+plt.show()
 
 #create some DOAS devices:
 doas1 = DOAS(1, [0,10,10], [1,4,20])
@@ -70,12 +73,10 @@ Measurement_devices = Measurement_Devices(DOASs, REFLs, vol)
 lines = Measurement_devices.return_plottables()
 DOAS_positions, REFL_positions = Measurement_devices.return_positions()
 measurements = Measurement_devices.measure()
-pwrspc_init, mean_rslt, pwrspec_rslt, std_rslt = Measurement_devices.IFT8_inversion()
 
-print(pwrspc_init)
-print(pwrspec_rslt)
-print(mean_rslt)
-print(std_rslt)
+
+
+
 
 #plotting
 plot_data = [go.Volume(
@@ -121,26 +122,74 @@ for REFL_position in REFL_positions:
                                   marker=dict(size=12.,color="rgba(0, 0, 0, 1)", symbol="diamond-open")))
     i+=1
 
-contour = go.Contour(z=contour.T, colorscale='inferno', contours_coloring='heatmap')
+if dimension == "2D":
+    mean_rslt, std_rslt = Measurement_devices.IFT8_inversion()
+    print(mean_rslt)
+    print(std_rslt)
+    contour = [go.Contour(z=normalized_ground_truth_field.T, colorscale='inferno', contours_coloring='heatmap'),
+               go.Contour(z=mean_rslt, colorscale='inferno', contours_coloring='heatmap'),
+               go.Contour(z=np.abs(normalized_ground_truth_field.T-np.array(mean_rslt)), colorscale='inferno', contours_coloring='heatmap'),
+               go.Contour(z=std_rslt, colorscale='inferno', contours_coloring='heatmap'),
+               ]
 
 
-contour_plot = go.Figure(data=contour)
-Measuring_situation_plot = go.Figure(data=plot_data)
+    contour_plot = go.Figure(data=contour)
+    Measuring_situation_plot = go.Figure(data=plot_data)
+
+    plot_figure = make_subplots(rows=2, cols=3, specs=[[{"type": "scene", "rowspan": 2}, {}, {}], [{}, {}, {}]],
+                                column_widths=[0.5, 0.25, 0.25],
+                                subplot_titles=("3D Measuring Situation", "Ground Truth", "Retrieved Field", "",
+                                                "Absolute Residual GrTr-RetrField", "Standard Deviation Retr. Field."))
+    for t in Measuring_situation_plot.data:
+        plot_figure.add_trace(t, row=1, col=1)
 
 
-plot_figure = make_subplots(rows=1, cols=2, specs=[[{"type": "scene"}, {}]])
-for t in Measuring_situation_plot.data:
-    plot_figure.add_trace(t, row=1, col=1)
+    plot_figure.add_trace(contour_plot.data[0], row=1, col=2)
+    plot_figure.add_trace(contour_plot.data[1], row=1, col=3)
+    plot_figure.add_trace(contour_plot.data[2], row=2, col=2)
+    plot_figure.add_trace(contour_plot.data[3], row=2, col=3)
 
-for t in contour_plot.data:
-    plot_figure.add_trace(t, row=1, col=2)
+    plot_figure.update_layout(scene_xaxis_showticklabels=True,
+                                scene_yaxis_showticklabels=True,
+                                scene_zaxis_showticklabels=True,
+                                showlegend=False)
 
-plot_figure.update_layout(scene_xaxis_showticklabels=True,
-                            scene_yaxis_showticklabels=True,
-                            scene_zaxis_showticklabels=True,
-                            showlegend=False)
+    plot_figure.show()
+else:
+    mean_rslt, std_rslt = Measurement_devices.IFT8_inversion_3D()
+    print(mean_rslt)
+    print(std_rslt)
+    results =  [go.Volume(x=X_field.flatten(), y=Y_field.flatten(), z=Z_field.flatten(),
+                          value=vol.flatten(), isomin=0.1, isomax=1., opacity=0.1, surface_count=25),
+                go.Volume(x=X_field.flatten(), y=Y_field.flatten(), z=Z_field.flatten(),
+                          value=mean_rslt.flatten(), isomin=0.1, isomax=1., opacity=0.1, surface_count=25),
+                go.Volume(x=X_field.flatten(), y=Y_field.flatten(), z=Z_field.flatten(),
+                          value=vol.flatten()-mean_rslt.flatten(), isomin=0.1, isomax=1., opacity=0.1, surface_count=25),
+                go.Volume(x=X_field.flatten(), y=Y_field.flatten(), z=Z_field.flatten(),
+                          value=std_rslt.flatten(), isomin=0.1, isomax=1., opacity=0.1, surface_count=25)]
 
-plot_figure.show()
+    results_plot = go.Figure(data=results)
+    Measuring_situation_plot = go.Figure(data=plot_data)
+
+    plot_figure = make_subplots(rows=2, cols=3, specs=[[{"type": "scene", "rowspan": 2}, {"type": "scene"}, {"type": "scene"}],
+                                                       [{}, {"type": "scene"}, {"type": "scene"}]],
+                                column_widths=[0.5, 0.25, 0.25],
+                                subplot_titles=("3D Measuring Situation", "Ground Truth", "Retrieved Field", "",
+                                                "Absolute Residual GrTr-RetrField", "Standard Deviation Retr. Field."))
+    for t in Measuring_situation_plot.data:
+        plot_figure.add_trace(t, row=1, col=1)
+
+    plot_figure.add_trace(results_plot.data[0], row=1, col=2)
+    plot_figure.add_trace(results_plot.data[1], row=1, col=3)
+    plot_figure.add_trace(results_plot.data[2], row=2, col=2)
+    plot_figure.add_trace(results_plot.data[3], row=2, col=3)
+
+    plot_figure.update_layout(scene_xaxis_showticklabels=True,
+                              scene_yaxis_showticklabels=True,
+                              scene_zaxis_showticklabels=True,
+                              showlegend=False)
+
+    plot_figure.show()
 
 
 

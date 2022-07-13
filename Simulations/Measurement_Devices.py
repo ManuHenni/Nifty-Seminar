@@ -142,20 +142,29 @@ class Measurement_Devices:
         return measurements
 
 
-    def measurement_inversion_2D(self):
+    def gaussian_inversion_2D(self):
         #b = self.measurement
         #x = [array of gaussian params] -> position of max, sigmax, sigmay
         #A = Verknüpft x und b -> A*x = b
         # also muss in A die Richtung der linie und die Gaussverteilung kodiert sein also quasi ein linienintegral entlang einer 2D gauss-verteilung
 
-        def c(h, c1, c2, sigmax, sigmay):
+        def integr_gaussian(h, c1, c2, sigmax, sigmay):
+            """
+            Integrated Multivariate Gaussian function.
+            :param h:
+            :param mux: mu in x-direction
+            :param muy: mu in y-direction
+            :param sigmax: sigma in x-direction
+            :param sigmay: sigma in y-direction
+            :return: returns integrated value along a line-vector
+            """
             return c1 * np.exp(-h * c2)
 
         def diff(x):
             pass
 
 
-    def IFT8_inversion(self):
+    def IFT8_inversion_2D(self):
         try:
             from mpi4py import MPI
             comm = MPI.COMM_WORLD
@@ -163,6 +172,7 @@ class Measurement_Devices:
         except ImportError:
             comm = None
             master = True
+
         def build_LOSs(doas_pos, refl_pos, normalization):
             LOS_starts = [[], []]
             LOS_ends = [[], []]
@@ -177,7 +187,7 @@ class Measurement_Devices:
         filename = "./output_ift_inversion/testing_field_inversion_{}.png"
         position_space = ift.RGSpace((self.simulated_field.shape[0], self.simulated_field.shape[1]))
         normalized_field = (np.sum(self.simulated_field, axis=2) / np.max(np.sum(self.simulated_field, axis=2)))
-        padder = ift.FieldZeroPadder(position_space, [i * 2 for i in position_space.shape], central=True).adjoint
+        padder = ift.FieldZeroPadder(position_space, [i * 2 for i in position_space.shape], central=False).adjoint
         print(padder.domain)
         #  For a detailed showcase of the effects the parameters
         #  of the CorrelatedField model have on the generated fields,
@@ -187,11 +197,11 @@ class Measurement_Devices:
             'offset_mean': 0,
             'offset_std': (1e-3, 1e-6),
             # Amplitude of field fluctuations
-            'fluctuations': (1., 0.7),  # 1.0, 1e-2
+            'fluctuations': (1., 0.1),  # 1.0, 1e-2
             # Exponent of power law power spectrum component
-            'loglogavgslope': (-3., 1),  # -6.0, 1   (mean, std)
+            'loglogavgslope': (-3., 0.5),  # -6.0, 1   (mean, std)
             # Amplitude of integrated Wiener process power spectrum component
-            'flexibility': (0.8, 0.1),  # 1.0, 0.5
+            'flexibility': (0.5, 0.3),  # 1.0, 0.5
             # How ragged the integrated Wiener process component is
             'asperity': (0.5, 0.4)  # 0.1, 0.5
         }
@@ -285,10 +295,143 @@ class Measurement_Devices:
         #         title="Sampled Posterior Power Spectrum",
         #         linewidth=[1.] * nsamples + [3., 3.],
         #         label=[None] * nsamples + ['Ground truth', 'Posterior mean'])
-        return pspec.force(ground_truth).val, mean.val, samples.average(logspec).exp().val, var.sqrt().val
+        return mean.val.T, var.sqrt().val.T
 
 
+    def IFT8_inversion_3D(self):
+        try:
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+            master = comm.Get_rank() == 0
+        except ImportError:
+            comm = None
+            master = True
 
+        def build_LOSs(doas_pos, refl_pos, normalization):
+            LOS_starts = [[], [], []]
+            LOS_ends = [[], [], []]
+            for doas in doas_pos:
+                print(doas)
+                for i in range(len(refl_pos)):
+                    LOS_starts[0].append(doas[0] / normalization)
+                    LOS_starts[1].append(doas[1] / normalization)
+                    LOS_starts[2].append(doas[2] / normalization)
+                    LOS_ends[0].append(refl_pos[i][0] / normalization)
+                    LOS_ends[1].append(refl_pos[i][1] / normalization)
+                    LOS_ends[2].append(refl_pos[i][2] / normalization)
+            return LOS_starts, LOS_ends
+
+        filename = "./output_ift_inversion/testing_field_inversion_{}.png"
+        position_space = ift.RGSpace((self.simulated_field.shape))
+        padder = ift.FieldZeroPadder(position_space, [i * 2 for i in position_space.shape], central=False).adjoint
+        print(padder.domain)
+        #  For a detailed showcase of the effects the parameters
+        #  of the CorrelatedField model have on the generated fields,
+        #  see 'getting_started_4_CorrelatedFields.ipynb'.
+
+        args = {
+            'offset_mean': 0,
+            'offset_std': (1e-3, 1e-6),
+            # Amplitude of field fluctuations
+            'fluctuations': (1., 0.1),  # 1.0, 1e-2
+            # Exponent of power law power spectrum component
+            'loglogavgslope': (-3., 0.5),  # -6.0, 1   (mean, std)
+            # Amplitude of integrated Wiener process power spectrum component
+            'flexibility': (0.5, 0.3),  # 1.0, 0.5
+            # How ragged the integrated Wiener process component is
+            'asperity': (0.5, 0.4)  # 0.1, 0.5
+        }
+
+        correlated_field = ift.SimpleCorrelatedField(padder.domain, **args)
+        pspec = correlated_field.power_spectrum
+        print(correlated_field.domain)
+        # ift.random.push_sseq_from_seed(np.random.randint(0,100))
+
+        # Apply a nonlinearity
+        # signal = ift.sigmoid(correlated_field) #das hier sollte ich ändern!
+        signal = ift.log(ift.Adder(1., domain=position_space)(ift.exp(padder(correlated_field))))
+
+        # Build the line-of-sight response and define signal response
+        doas_pos = self.return_positions(dim="3D")[0]
+        refl_pos = self.return_positions(dim="3D")[1]
+        LOS_starts, LOS_ends = build_LOSs(doas_pos, refl_pos, 30)
+        R = ift.LOSResponse(position_space, starts=LOS_starts, ends=LOS_ends)
+        signal_response = R(signal)
+
+
+        # Specify noise
+        data_space = R.target
+        noise = .001
+        N = ift.ScalingOperator(data_space, noise, np.float64)
+
+        # Generate mock signal and data
+        # Ich möchte normalized_field als mock field benutzen.
+        # mock_position = ift.from_random(signal_response.domain, 'normal')
+        ground_truth = ift.makeField(position_space, self.simulated_field)
+        # ground_truth = signal(ift.from_random(signal.domain))
+
+        # plot = ift.Plot()
+        # plot.add(R(ground_truth), title='Ground Truth', zmin=0, zmax=1)
+        # plot.output()
+
+        data = R(ground_truth) + N.draw_sample()
+
+        # Minimization parameters
+        ic_sampling = ift.AbsDeltaEnergyController(name="Sampling (linear)",
+                                                   deltaE=0.05, iteration_limit=100)
+        ic_newton = ift.AbsDeltaEnergyController(name='Newton', deltaE=0.5,
+                                                 convergence_level=2, iteration_limit=35)
+        minimizer = ift.NewtonCG(ic_newton)
+        ic_sampling_nl = ift.AbsDeltaEnergyController(name='Sampling (nonlin)',
+                                                      deltaE=0.5, iteration_limit=15, convergence_level=2)
+        minimizer_sampling = ift.NewtonCG(ic_sampling_nl)
+
+        # Set up likelihood energy and information Hamiltonian
+        likelihood_energy = (ift.GaussianEnergy(data, inverse_covariance=N.inverse) @ signal_response)
+        H = ift.StandardHamiltonian(likelihood_energy, ic_sampling)
+
+
+        initial_mean = ift.MultiField.full(H.domain, 0.)
+        mean = initial_mean
+
+        plot = ift.Plot()
+        plot.add(ground_truth, title='Ground Truth', zmin=0, zmax=1)
+        plot.add(R.adjoint_times(data), title='Data')
+        plot.add([pspec.force(mean)], title='Power Spectrum')
+        plot.output(ny=1, nx=3, xsize=24, ysize=6, name=filename.format("setup"))
+
+        # number of samples used to estimate the KL
+        # Minimize KL
+        n_iterations = 6
+        n_samples = lambda iiter: 10 if iiter < 5 else 20
+        samples = ift.optimize_kl(likelihood_energy, n_iterations, n_samples,
+                                  minimizer, ic_sampling, minimizer_sampling,
+                                  plottable_operators={"signal": (signal, dict(vmin=0, vmax=1)),
+                                                       "power spectrum": pspec},
+                                  ground_truth_position=None,
+                                  output_directory="output_ift_inversion",
+                                  overwrite=True, comm=comm)
+
+        if True:
+            # Load result from disk. May be useful for long inference runs, where
+            # inference and posterior analysis are split into two steps
+            samples = ift.ResidualSampleList.load("output_ift_inversion/pickle/last", comm=comm)
+
+        # Plotting
+        filename_res = filename.format("results")
+        plot = ift.Plot()
+        mean, var = samples.sample_stat(signal)
+        plot.add(mean, title="Posterior Mean", vmin=0, vmax=1)
+        plot.add(var.sqrt(), title="Posterior Standard Deviation", vmin=0)
+
+        nsamples = samples.n_samples
+        logspec = pspec.log()
+        #plot.add(list(samples.iterator(pspec)) +
+        #         [pspec.force(ground_truth), samples.average(logspec).exp()],
+        #         title="Sampled Posterior Power Spectrum",
+        #         linewidth=[1.] * nsamples + [3., 3.],
+        #         label=[None] * nsamples + ['Ground truth', 'Posterior mean'])
+        return mean.val.T, var.sqrt().val.T
 
 
 
