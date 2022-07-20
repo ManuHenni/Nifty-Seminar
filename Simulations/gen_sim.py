@@ -34,46 +34,60 @@ def generate_centered_gauss(x_len, y_len, z_len, bubble_amount=1, bubble_scale=3
     # Generate nicely looking random 3D-field
     X, Y, Z = np.mgrid[:x_len, :y_len, :z_len]
     vol = np.zeros((x_len, y_len, z_len))
-    pts = (np.array([x_len,
-                     y_len,
-                     z_len])).astype(np.int)
     vol[(int(x_len/2), int(y_len/2), int(z_len/2))] = 1
-
     vol = ndimage.gaussian_filter(vol, bubble_scale)
     vol /= vol.max()
     return vol, X, Y, Z
 
 vol, X_field, Y_field, Z_field = generate_random_field(30,30,21)
-#vol, X_field, Y_field, Z_field = generate_centered_gauss(30,30,21)
+vol, X_field, Y_field, Z_field = generate_centered_gauss(30,30,21, bubble_scale=(3, 8, 0))
+
 dimension = "2D"
 ground_truth_field = np.sum(vol, axis=2)
 normalized_ground_truth_field = (np.sum(vol, axis=2) / np.max(np.sum(vol, axis=2)))
 plt.imshow(normalized_ground_truth_field, cmap="inferno")
 plt.show()
 
-#create some DOAS devices:
-doas1 = DOAS(1, [0,10,10], [1,4,20])
-doas2 = DOAS(2, [0,20,10], [1,4,200])
-#doas3 = DOAS(3, [-10,29,2], [10,40,200])
-doas3 = DOAS(4, [10,0,10], [10,40,200])
-doas4 = DOAS(5, [20,0,10], [10,40,200])
-DOASs = [doas1, doas2, doas3, doas4]
+#create some 3D DOAS devices:
+#doas1 = DOAS(1, [0,10,10], [1,4,20])
+#doas2 = DOAS(2, [0,20,10], [1,4,200])
+#doas3 = DOAS(4, [10,0,10], [10,40,200])
+#doas4 = DOAS(5, [20,0,10], [10,40,200])
+#DOASs = [doas1, doas2, doas3, doas4]
+
+#create some 2D DOAS devices:
+doas1 = DOAS(1, [0,15], [1,4])
+doas2 = DOAS(2, [0,29], [1,4])
+doas3 = DOAS(4, [15,0], [10,40])
+doas4 = DOAS(5, [29,0], [10,40])
+doas5 = DOAS(5, [0,0], [10,40])
+DOASs = [doas1, doas2, doas3, doas4, doas5]
 
 
-#create some Reflectors:
-refl1 = RetroReflector(1, [30,30,10])
-refl2 = RetroReflector(2, [20,30,20])
-refl3 = RetroReflector(3, [10,30,10])
-refl4 = RetroReflector(4, [30,20,20])
-refl5 = RetroReflector(5, [30,10,2])
-REFLs = [refl1, refl2, refl3, refl4, refl5]
+#create some 3D Reflectors:
+#refl1 = RetroReflector(1, [30,30,10])
+#refl2 = RetroReflector(2, [20,30,20])
+#refl3 = RetroReflector(3, [10,30,10])
+#refl4 = RetroReflector(4, [30,20,20])
+#refl5 = RetroReflector(5, [30,10,2])
+#REFLs = [refl1, refl2, refl3, refl4, refl5]
+
+#create some 2D Reflectors:
+refl1 = RetroReflector(1, [30,30])
+refl2 = RetroReflector(2, [20,30])
+refl3 = RetroReflector(3, [10,30])
+refl4 = RetroReflector(4, [30,20])
+refl5 = RetroReflector(5, [30,10])
+refl6 = RetroReflector(4, [15,30])
+
+REFLs = [refl1, refl2, refl3, refl4, refl5, refl6]
 
 
 Measurement_devices = Measurement_Devices(DOASs, REFLs, vol)
 lines = Measurement_devices.return_plottables()
 DOAS_positions, REFL_positions = Measurement_devices.return_positions()
-measurements = Measurement_devices.measure()
-
+measurements = Measurement_devices.measure_2D()
+Measurement_devices.gaussian_inversion_2D(show=True)
 
 
 
@@ -123,7 +137,7 @@ for REFL_position in REFL_positions:
     i+=1
 
 if dimension == "2D":
-    mean_rslt, std_rslt = Measurement_devices.IFT8_inversion()
+    mean_rslt, std_rslt = Measurement_devices.IFT8_inversion_2D()
     print(mean_rslt)
     print(std_rslt)
     contour = [go.Contour(z=normalized_ground_truth_field.T, colorscale='inferno', contours_coloring='heatmap'),

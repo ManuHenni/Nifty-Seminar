@@ -2,12 +2,15 @@ import Line
 #from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 import matplotlib.pyplot as plt
-from Line import Line
+from Line import Line, Line_2D
 import math as m
 import sys
 import numpy as np
 import nifty8 as ift
 import plotly.graph_objects as go
+import math as m
+from scipy.optimize import minimize, least_squares
+from time import time
 
 
 class Measurement_Devices:
@@ -21,6 +24,7 @@ class Measurement_Devices:
         self.DOAS_devices = DOAS_devices
         self.Reflectors = Reflectors
         self.simulated_field = simulated_field
+        self.normalized_field = np.sum(self.simulated_field, axis=2) / np.max(np.sum(self.simulated_field, axis=2))
 
     def print_parameters(self):
         for DOAS_device in self.DOAS_devices:
@@ -33,7 +37,7 @@ class Measurement_Devices:
         return_arr = []
         for DOAS_device in self.DOAS_devices:
             for Reflector in self.Reflectors:
-                line_points = Line(Reflector.position-DOAS_device.position, DOAS_device.position).get_plot_points()
+                line_points = Line_2D(Reflector.position-DOAS_device.position, DOAS_device.position).get_plot_points()
                 #print(line_points)
                 return_arr.append(line_points)
         return return_arr
@@ -50,10 +54,7 @@ class Measurement_Devices:
         else:
             return [k[:2] for k in doas_positions], [k[:2] for k in refl_positions]
 
-
-
-
-    def measure(self):
+    def measure_3D(self):
         """
         measure in the simulated field along a straight line
         :return: b-vector of the measurement
@@ -141,27 +142,252 @@ class Measurement_Devices:
 
         return measurements
 
+    def measure_2D(self):
+        """
+        measure in the simulated field along a straight line
+        :return: b-vector of the measurement
+        """
 
-    def gaussian_inversion_2D(self):
-        #b = self.measurement
-        #x = [array of gaussian params] -> position of max, sigmax, sigmay
-        #A = Verknüpft x und b -> A*x = b
-        # also muss in A die Richtung der linie und die Gaussverteilung kodiert sein also quasi ein linienintegral entlang einer 2D gauss-verteilung
+        measurements=[]
 
-        def integr_gaussian(h, c1, c2, sigmax, sigmay):
+        lines = self.return_plottables()
+
+        doas_ids = [DOAS_device.ID for DOAS_device in self.DOAS_devices]
+        reflector_ids = [refl.ID for refl in self.Reflectors]
+        doas_idx = 0
+        reflector_idx = 0
+        weights_total = np.zeros(self.normalized_field.shape)
+        for line in lines:
+            coordinates = []
+            for i in range(line.shape[1]):
+                coordinates.append(tuple(line[:,i].astype("int").tolist()))
+            coordinates = list(dict.fromkeys(coordinates))
+
+            x_len = self.normalized_field.shape[0]
+            y_len = self.normalized_field.shape[1]
+            vol = np.zeros((x_len, y_len))
+            for x, y in coordinates:
+                if x>0 and y>0:
+                    vol[x, y] = 1
+
+            weights = np.multiply(self.normalized_field, vol)
+            #weights_total[np.where(weights > 0)] = 1
+            weights_total += vol * np.sum(weights)
+            #print(weights[np.nonzero(weights)])
+
+            print("Doas {} to Reflector {}: {} ppb".format(doas_ids[doas_idx], reflector_ids[reflector_idx], round(np.sum(weights[np.nonzero(weights)]), 5)))
+            measurements.append(np.sum(weights[np.nonzero(weights)]))
+
+            reflector_idx += 1
+            if reflector_idx == len(reflector_ids):
+                reflector_idx=0
+                doas_idx+=1
+        print("-----------------------------------------------------------------------")
+        self.measurement = measurements
+        self.measured_lines = lines
+        self.measurement_weights_plotting = weights_total
+
+        return measurements
+
+    def gaussian_inversion_2D(self, show=False):
+
+        def measure_2D_num(field):
+            """
+            measure in the simulated field along a straight line
+            :return: b-vector of the measurement
+            """
+            measurements = []
+
+            def return_plottables_num():
+                return_arr = []
+                for DOAS_device in self.DOAS_devices:
+                    for Reflector in self.Reflectors:
+                        line_points = Line_2D(Reflector.position - DOAS_device.position,
+                                              DOAS_device.position).get_plot_points()
+                        # print(line_points)
+                        return_arr.append(line_points)
+                return return_arr
+            lines = return_plottables_num()
+
+            doas_ids = [DOAS_device.ID for DOAS_device in self.DOAS_devices]
+            reflector_ids = [refl.ID for refl in self.Reflectors]
+            doas_idx = 0
+            reflector_idx = 0
+            weights_total = np.zeros(field.shape)
+            for line in lines:
+                coordinates = []
+                for i in range(line.shape[1]):
+                    coordinates.append(tuple(line[:, i].astype("int").tolist()))
+                coordinates = list(dict.fromkeys(coordinates))
+
+                x_len = field.shape[0]
+                y_len = field.shape[1]
+                vol = np.zeros((x_len, y_len))
+                for x, y in coordinates:
+                    if x > 0 and y > 0:
+                        vol[x, y] = 1
+
+                weights = np.multiply(field, vol)
+                weights_total += vol * np.sum(weights)
+                measurements.append(np.sum(weights[np.nonzero(weights)]))
+
+                reflector_idx += 1
+                if reflector_idx == len(reflector_ids):
+                    reflector_idx = 0
+                    doas_idx += 1
+
+            return measurements, weights_total
+
+        def integr_gaussian(mux, muy, sigmax, sigmay, doas, refl):
             """
             Integrated Multivariate Gaussian function.
-            :param h:
             :param mux: mu in x-direction
             :param muy: mu in y-direction
             :param sigmax: sigma in x-direction
             :param sigmay: sigma in y-direction
+            :param doas: 2-D array of DOAS position
+            :param refl: 2-D array of REFLECTOR position
             :return: returns integrated value along a line-vector
             """
-            return c1 * np.exp(-h * c2)
 
-        def diff(x):
-            pass
+            def custom_erf(t):
+                return m.erf((rx*sigmay**2*(kx+rx*t) + ry*sigmax**2*(ky+ry*t)) /
+                             (np.sqrt(2)*sigmax*sigmay*np.sqrt(rx**2*sigmay**2 + ry**2*sigmax**2)))
+
+            rx, ry = [refl[0]-doas[0], refl[1]-doas[1]]
+            kx, ky = [doas[0]-mux, doas[1]-muy]
+            C = np.sqrt(rx**2+ry**2) /(2*np.sqrt(rx**2*sigmay**2 + ry**2*sigmax**2)) * \
+                np.exp(-(ky*rx - kx*ry)**2 / (2*(rx**2*sigmay**2 + ry**2*sigmax**2)))# * (np.sqrt(2*np.pi)*sigmay*sigmax)
+
+            return (custom_erf(1) - custom_erf(0)) * C * (np.sqrt(2*np.pi)*sigmay*sigmax)
+
+        def get_numerical_measurements(mux, muy, sigmax, sigmay, lines, doas, refl):
+            weights_total = np.zeros(self.normalized_field.shape)
+            j = 0
+            for doas in doas:
+                for i in range(len(refl)):
+                    coordinates = []
+                    for k in range(lines[j].shape[1]):
+                        coordinates.append(tuple(lines[j][:, k].astype("int").tolist()))
+                    coordinates = list(dict.fromkeys(coordinates))
+                    x_len = self.normalized_field.shape[0]
+                    y_len = self.normalized_field.shape[1]
+                    vol = np.zeros((x_len, y_len))
+                    for x, y in coordinates:
+                        if x > 0 and y > 0:
+                            vol[x, y] = 1
+                    j += 1
+
+                    print(f"Doas {doas.ID} to Reflector {refl[i].ID}: {round(integr_gaussian(mux, muy, sigmax, sigmay, doas.position, refl[i].position), 5)} ppb")
+                    weights = vol * integr_gaussian(mux, muy, sigmax, sigmay, doas.position, refl[i].position)
+                    weights_total += weights
+            return weights_total
+
+        def gaussian(mux, muy, sigmax, sigmay, A = 1):
+            grid_x, grid_y = np.mgrid[0:29:30j, 0:29:30j]
+            return A * np.exp(-(((grid_x - mux) ** 2 / (2 * sigmax ** 2)) + ((grid_y - muy) ** 2 / (2 * sigmay ** 2))))
+
+        def diff(params, *args):
+            mux, muy, sigmax, sigmay = params
+            try:
+                doas, refl, measurements, proove_arr, numerical = args
+            except:
+                doas, refl, measurements, proove_arr, numerical = args[0]
+
+            if not numerical:
+                diff_arr = []
+                y=0
+                for doas in doas:
+                    for i in range(len(refl)):
+                        sim_meas = integr_gaussian(mux, muy, sigmax, sigmay, doas.position, refl[i].position)
+                        diff_arr.append(abs(measurements[y] - sim_meas) ** 3)
+                        y+=1
+                cost_func_vals_ana.append(np.sum(diff_arr))
+                return np.sum(diff_arr)
+            else:
+                diff_arr = []
+                for i in range(len(measurements)):
+                    sim_meas = measure_2D_num(gaussian(mux, muy, sigmax, sigmay))[0]
+                    diff_arr.append(abs(measurements[i] - sim_meas[i]) ** 3)
+                cost_func_vals_num.append(np.sum(diff_arr))
+                if len(cost_func_vals_num)%10==0:
+                    print(f"Current diff val: {round(cost_func_vals_num[-1],3)}")
+                return np.sum(diff_arr)
+
+        if show:
+            cost_func_vals_ana = []
+            start_ana = time()
+            res_analytical = minimize(diff, np.array([10, 20, 6, 6]),
+                                      args=[self.DOAS_devices, self.Reflectors, self.measurement, cost_func_vals_ana, False],
+                                      bounds=[(0,30), (0,30), (1,10), (1,10)])
+            end_ana = time()
+            time_ana = end_ana-start_ana
+            print(res_analytical)
+            mux_ana, muy_ana, sigmax_ana, sigmay_ana = res_analytical.x #[15, 15, 3, 3] #
+
+            cost_func_vals_num = []
+            start_num = time()
+            res_numerical = minimize(diff, np.array([10, 20, 6, 6]),
+                                     args=[self.DOAS_devices, self.Reflectors, self.measurement, cost_func_vals_num, True],
+                                     bounds=[(0, 30), (0, 30), (1, 10), (1, 10)])
+            end_num = time()
+            time_num = end_num - start_num
+            print(res_numerical)
+            mux_num, muy_num, sigmax_num, sigmay_num = res_numerical.x#[15, 15, 3, 3] #
+
+            plt.rcParams['text.usetex'] = True
+            fig = plt.figure()
+
+            fig.add_subplot(331)
+            plt.imshow(self.normalized_field, cmap="inferno")
+            plt.colorbar()
+            plt.title("Ground Truth")
+
+            fig.add_subplot(332)
+            plt.imshow(self.measurement_weights_plotting, cmap="inferno")
+            plt.colorbar()
+            plt.title("Measurements Ground Truth")
+
+            fig.add_subplot(333)
+            plt.axis("off")
+
+            fig.add_subplot(334)
+            plt.imshow(gaussian(mux_ana, muy_ana, sigmax_ana, sigmay_ana), cmap="inferno")
+            plt.colorbar()
+            plt.title("Retrieved Field analytical")
+
+            fig.add_subplot(335)
+            plt.imshow(get_numerical_measurements(mux_ana, muy_ana, sigmax_ana, sigmay_ana, self.measured_lines, self.DOAS_devices, self.Reflectors), cmap="inferno")
+            plt.colorbar()
+            plt.title("Measurements Retr. Field analytical")
+
+            fig.add_subplot(336)
+            plt.plot(np.array(cost_func_vals_ana))
+            plt.yscale("log")
+            plt.xlabel("$\#$ fev")
+            plt.ylabel("$\chi^2$")
+            plt.grid(True, which="both", ls="-", alpha=0.3)
+            plt.title(r"$\chi^2$ analytical " + str(round(time_ana,5)) + "s")
+
+            fig.add_subplot(337)
+            plt.imshow(gaussian(mux_num, muy_num, sigmax_num, sigmay_num), cmap="inferno")
+            plt.colorbar()
+            plt.title("Retrieved Field numerical")
+
+            fig.add_subplot(338)
+            plt.imshow(measure_2D_num(gaussian(mux_num, muy_num, sigmax_num, sigmay_num))[1], cmap="inferno")
+            plt.colorbar()
+            plt.title("Measurements Retr. Field numerical")
+
+            fig.add_subplot(339)
+            plt.plot(np.array(cost_func_vals_num))
+            plt.yscale("log")
+            plt.xlabel("$\#$ fev")
+            plt.ylabel("$\chi^2$")
+            plt.grid(True, which="both", ls="-", alpha=0.3)
+            plt.title(r"$\chi^2$ numerical " + str(round(time_num,5)) + "s")
+
+            plt.show()
 
 
     def IFT8_inversion_2D(self):
@@ -253,7 +479,6 @@ class Measurement_Devices:
         # Set up likelihood energy and information Hamiltonian
         likelihood_energy = (ift.GaussianEnergy(data, inverse_covariance=N.inverse) @ signal_response)
         H = ift.StandardHamiltonian(likelihood_energy, ic_sampling)
-
 
         initial_mean = ift.MultiField.full(H.domain, 0.)
         mean = initial_mean
@@ -433,7 +658,12 @@ class Measurement_Devices:
         #         label=[None] * nsamples + ['Ground truth', 'Posterior mean'])
         return mean.val.T, var.sqrt().val.T
 
+    def scaps(self):
+        f = lambda x: -np.exp(-0.5 * ((((x[0] - x1) * np.cos(theta) - (x[1] - x2) * np.sin(theta)) / sig1) ** 2 + (
+                    ((x[0] - x1) * np.sin(theta) + (x[1] - x2) * np.cos(theta)) / sig2) ** 2)) / (
+                                  sig1 * 2 * np.pi * sig2)
 
+        pass
 
 
 

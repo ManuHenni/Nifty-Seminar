@@ -312,3 +312,13 @@ class Line:
                     , 0.20348607, 0.25344467, 0.29900262, 0.27061496, 0.20671766, 0.18187025
                     , 0.17493129, 0.17765189, 0.16527618, 0.15285608, 0.17546857, 0.19265805]]
 
+class Line_2D:
+    def __init__(self, vector, point_on_line) -> None:
+        self.vector = np.array(vector).reshape(2, 1)
+        self.point_on_line = np.array(point_on_line).reshape(2, 1)
+
+    def get_plot_points(self, step_size=0.01):
+        points = np.zeros((2, 0))
+        for i in np.arange(0, 1, step_size):
+            points = np.concatenate((points, self.point_on_line + i * self.vector), axis=1)
+        return points
