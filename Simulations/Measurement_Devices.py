@@ -238,6 +238,23 @@ class Measurement_Devices:
 
             return measurements, weights_total
 
+        def gaussian_rotatable2(mux, muy, sigmax, sigmay, theta):
+            grid_x, grid_y = np.mgrid[0:29:30j, 0:29:30j]
+            theta = np.deg2rad(theta)
+            return 1/(sigmax * 2 * np.pi * sigmay) * np.exp(-0.5 * ((((grid_x - mux) * np.cos(theta) -
+                   (grid_y - muy) * np.sin(theta)) / sigmax) ** 2 + (((grid_x - mux) * np.sin(theta) +
+                   (grid_y - muy) * np.cos(theta)) / sigmay) ** 2))
+
+        def measure_2D_NumInt_rotatable(mux, muy, sigmax, sigmay, theta, doas, refl):
+            def line_gaussian_rotatable2(sigmax, sigmay, theta, rx, ry, kx, ky, t):
+                theta = np.deg2rad(theta)
+                return 1 / (sigmax * 2 * np.pi * sigmay) * np.exp(-0.5 * ((((rx*t + kx) * np.cos(theta) - (ry*t + ky) * np.sin(
+                            theta)) / sigmax) ** 2 + (((rx*t + kx) * np.sin(theta) + (ry*t + ky) * np.cos(theta)) / sigmay) ** 2))
+
+            rx, ry = [refl[0] - doas[0], refl[1] - doas[1]]
+            kx, ky = [doas[0] - mux, doas[1] - muy]
+            field = gaussian_rotatable2(mux, muy, sigmax, sigmay, theta)
+
         def integr_gaussian(mux, muy, sigmax, sigmay, doas, refl):
             """
             Integrated Multivariate Gaussian function.
@@ -257,7 +274,7 @@ class Measurement_Devices:
             rx, ry = [refl[0]-doas[0], refl[1]-doas[1]]
             kx, ky = [doas[0]-mux, doas[1]-muy]
             C = np.sqrt(rx**2+ry**2) /(2*np.sqrt(rx**2*sigmay**2 + ry**2*sigmax**2)) * \
-                np.exp(-(ky*rx - kx*ry)**2 / (2*(rx**2*sigmay**2 + ry**2*sigmax**2)))# * (np.sqrt(2*np.pi)*sigmay*sigmax)
+                np.exp(-(ky*rx - kx*ry)**2 / (2*(rx**2*sigmay**2 + ry**2*sigmax**2)))
 
             return (custom_erf(1) - custom_erf(0)) * C * (np.sqrt(2*np.pi)*sigmay*sigmax)
 
@@ -287,6 +304,10 @@ class Measurement_Devices:
             grid_x, grid_y = np.mgrid[0:29:30j, 0:29:30j]
             return A * np.exp(-(((grid_x - mux) ** 2 / (2 * sigmax ** 2)) + ((grid_y - muy) ** 2 / (2 * sigmay ** 2))))
 
+
+
+
+
         def diff(params, *args):
             mux, muy, sigmax, sigmay = params
             try:
@@ -315,6 +336,10 @@ class Measurement_Devices:
                 return np.sum(diff_arr)
 
         if show:
+
+            plt.imshow(gaussian_rotatable2(15, 15, 2, 7, -45))
+            plt.show()
+
             cost_func_vals_ana = []
             start_ana = time()
             res_analytical = minimize(diff, np.array([10, 20, 6, 6]),
@@ -658,12 +683,7 @@ class Measurement_Devices:
         #         label=[None] * nsamples + ['Ground truth', 'Posterior mean'])
         return mean.val.T, var.sqrt().val.T
 
-    def scaps(self):
-        f = lambda x: -np.exp(-0.5 * ((((x[0] - x1) * np.cos(theta) - (x[1] - x2) * np.sin(theta)) / sig1) ** 2 + (
-                    ((x[0] - x1) * np.sin(theta) + (x[1] - x2) * np.cos(theta)) / sig2) ** 2)) / (
-                                  sig1 * 2 * np.pi * sig2)
 
-        pass
 
 
 
