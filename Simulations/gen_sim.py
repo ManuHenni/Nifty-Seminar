@@ -16,7 +16,7 @@ from Measurement_Devices import *
 import matplotlib
 matplotlib.use("TkAgg")
 
-def generate_random_field(x_len, y_len, z_len, bubble_amount=15, bubble_scale=4):
+def generate_random_field(x_len, y_len, z_len, bubble_amount=15, bubble_scale=5):
     # Generate nicely looking random 3D-field
     np.random.seed(np.random.randint(0,1000))
     X, Y, Z = np.mgrid[:x_len, :y_len, :z_len]
@@ -27,25 +27,41 @@ def generate_random_field(x_len, y_len, z_len, bubble_amount=15, bubble_scale=4)
     vol[tuple(indices for indices in pts)] = 1
 
     vol = ndimage.gaussian_filter(vol, bubble_scale)
-    vol /= vol.max()
+    #vol /= vol.max()
     return vol, X, Y, Z
 
-def generate_centered_gauss(x_len, y_len, z_len, bubble_amount=1, bubble_scale=3):
+def generate_gauss(x_len, y_len, z_len, bubble_scale=3, centered = False, mux=None, muy=None, muz=None):
     # Generate nicely looking random 3D-field
     X, Y, Z = np.mgrid[:x_len, :y_len, :z_len]
     vol = np.zeros((x_len, y_len, z_len))
-    vol[(int(x_len/2), int(y_len/2), int(z_len/2))] = 1
+    if centered:
+        vol[(int(x_len/2), int(y_len/2), int(z_len/2))] = 1
+    else:
+        vol[mux, muy, muz] = 1
     vol = ndimage.gaussian_filter(vol, bubble_scale)
     vol /= vol.max()
     return vol, X, Y, Z
 
-vol, X_field, Y_field, Z_field = generate_random_field(30,30,21)
-vol, X_field, Y_field, Z_field = generate_centered_gauss(30,30,21, bubble_scale=(3, 8, 0))
+def generate_random_field2(x_len, y_len, z_len, bubble_amount=6, bubble_scale=5):
+    field_tot = np.zeros((x_len, y_len, z_len))
+    for i in range(bubble_amount):
+        field, X, Y, Z = generate_gauss(x_len, y_len, z_len,
+                                bubble_scale=(np.random.randint(2, 10), np.random.randint(2, 10), np.random.randint(2, 10)),
+                                mux=np.random.randint(0, 29),
+                                muy=np.random.randint(0, 29),
+                                muz=np.random.randint(0, 21))
+        field_tot += field
 
-dimension = "2D"
+    return field_tot, X, Y, Z
+
+vol, X_field, Y_field, Z_field = generate_random_field2(30, 30, 21)
+#vol, X_field, Y_field, Z_field = generate_gauss(30,30,21, bubble_scale=(3, 8, 0), centered = True)
+
+dimension = "3D"
 ground_truth_field = np.sum(vol, axis=2)
-normalized_ground_truth_field = (np.sum(vol, axis=2) / np.max(np.sum(vol, axis=2)))
+normalized_ground_truth_field = np.sum(vol, axis=2) / np.max(np.sum(vol, axis=2))
 plt.imshow(normalized_ground_truth_field, cmap="inferno")
+plt.colorbar()
 plt.show()
 
 #create some 3D DOAS devices:
@@ -58,8 +74,8 @@ plt.show()
 #create some 2D DOAS devices:
 doas1 = DOAS(1, [0,15], [1,4])
 doas2 = DOAS(2, [0,29], [1,4])
-doas3 = DOAS(4, [15,0], [10,40])
-doas4 = DOAS(5, [29,0], [10,40])
+doas3 = DOAS(3, [15,0], [10,40])
+doas4 = DOAS(4, [29,0], [10,40])
 doas5 = DOAS(5, [0,0], [10,40])
 DOASs = [doas1, doas2, doas3, doas4, doas5]
 
@@ -73,12 +89,12 @@ DOASs = [doas1, doas2, doas3, doas4, doas5]
 #REFLs = [refl1, refl2, refl3, refl4, refl5]
 
 #create some 2D Reflectors:
-refl1 = RetroReflector(1, [30,30])
-refl2 = RetroReflector(2, [20,30])
-refl3 = RetroReflector(3, [10,30])
-refl4 = RetroReflector(4, [30,20])
-refl5 = RetroReflector(5, [30,10])
-refl6 = RetroReflector(4, [15,30])
+refl1 = RetroReflector(1, [29,29])
+refl2 = RetroReflector(2, [20,29])
+refl3 = RetroReflector(3, [10,29])
+refl4 = RetroReflector(4, [29,20])
+refl5 = RetroReflector(5, [29,10])
+refl6 = RetroReflector(6, [15,29])
 
 REFLs = [refl1, refl2, refl3, refl4, refl5, refl6]
 
@@ -86,8 +102,9 @@ REFLs = [refl1, refl2, refl3, refl4, refl5, refl6]
 Measurement_devices = Measurement_Devices(DOASs, REFLs, vol)
 lines = Measurement_devices.return_plottables()
 DOAS_positions, REFL_positions = Measurement_devices.return_positions()
-measurements = Measurement_devices.measure_2D()
-Measurement_devices.gaussian_inversion_2D(show=True)
+measurements = Measurement_devices.measure_3D()
+#Measurement_devices.gaussian_inversion_2D(show=True)
+Measurement_devices.IFT8_inversion_3D()
 
 
 

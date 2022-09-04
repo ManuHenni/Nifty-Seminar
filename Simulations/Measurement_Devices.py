@@ -10,7 +10,10 @@ import nifty8 as ift
 import plotly.graph_objects as go
 import math as m
 from scipy.optimize import minimize, least_squares
+import scipy.ndimage
 from time import time
+
+
 
 
 class Measurement_Devices:
@@ -66,15 +69,6 @@ class Measurement_Devices:
         #       ID, Position, Orientation, Measured Value, Uncertainty
         #
 
-
-
-        def line_eq(t, position, orientation):
-            alpha, beta, gamma = orientation
-            rot_X_Axis = np.array([[1, 0, 0], [0, m.cos(alpha), -m.sin(alpha)], [0, m.sin(alpha), m.cos(alpha)]])
-            rot_Y_Axis = np.array([[m.cos(beta), 0, m.sin(beta)], [0, 1, 0], [-m.sin(beta), 0, m.cos(beta)]])
-            rot_Z_Axis = np.array([[m.cos(gamma), -m.sin(gamma), 0], [m.sin(gamma), m.cos(gamma), 0], [0, 0, 1]])
-            R_C = rot_X_Axis.dot(rot_Y_Axis).dot(rot_Z_Axis)
-            return position + np.array([0,0,-1]).dot(R_C)*t
         # for DOAS_device in DOAS_devices:
         #    orientation = DOAS_device.orientation
         #    position = DOAS_device.position
@@ -87,6 +81,7 @@ class Measurement_Devices:
         #ax = fig.gca(projection='3d')
         #ax.set_aspect('auto')
         lines = self.return_plottables()
+        print(lines)
 
         doas_ids = [DOAS_device.ID for DOAS_device in self.DOAS_devices]
         reflector_ids = [refl.ID for refl in self.Reflectors]
@@ -99,8 +94,7 @@ class Measurement_Devices:
                 #print(line[:,i].astype("int"))
                 coordinates.append(tuple(line[:,i].astype("int").tolist()))
             coordinates = list(dict.fromkeys(coordinates))
-            #print(coordinates)
-
+            print(coordinates)
             x_len=self.simulated_field.shape[0]
             y_len=self.simulated_field.shape[1]
             z_len=self.simulated_field.shape[2]
@@ -167,7 +161,7 @@ class Measurement_Devices:
             y_len = self.normalized_field.shape[1]
             vol = np.zeros((x_len, y_len))
             for x, y in coordinates:
-                if x>0 and y>0:
+                if x > 0 and y > 0:
                     vol[x, y] = 1
 
             weights = np.multiply(self.normalized_field, vol)
@@ -175,7 +169,8 @@ class Measurement_Devices:
             weights_total += vol * np.sum(weights)
             #print(weights[np.nonzero(weights)])
 
-            print("Doas {} to Reflector {}: {} ppb".format(doas_ids[doas_idx], reflector_ids[reflector_idx], round(np.sum(weights[np.nonzero(weights)]), 5)))
+            print("Doas {} to Reflector {}: {} ppb".format(doas_ids[doas_idx], reflector_ids[reflector_idx],
+                                                           round(np.sum(weights[np.nonzero(weights)]), 5)))
             measurements.append(np.sum(weights[np.nonzero(weights)]))
 
             reflector_idx += 1
@@ -202,9 +197,7 @@ class Measurement_Devices:
                 return_arr = []
                 for DOAS_device in self.DOAS_devices:
                     for Reflector in self.Reflectors:
-                        line_points = Line_2D(Reflector.position - DOAS_device.position,
-                                              DOAS_device.position).get_plot_points()
-                        # print(line_points)
+                        line_points = Line_2D(Reflector.position - DOAS_device.position, DOAS_device.position).get_plot_points()
                         return_arr.append(line_points)
                 return return_arr
             lines = return_plottables_num()
@@ -238,24 +231,67 @@ class Measurement_Devices:
 
             return measurements, weights_total
 
-        def gaussian_rotatable2(mux, muy, sigmax, sigmay, theta):
+        def gaussian_rotatable(mux, muy, sigmax, sigmay, theta):
             grid_x, grid_y = np.mgrid[0:29:30j, 0:29:30j]
             theta = np.deg2rad(theta)
-            return 1/(sigmax * 2 * np.pi * sigmay) * np.exp(-0.5 * ((((grid_x - mux) * np.cos(theta) -
-                   (grid_y - muy) * np.sin(theta)) / sigmax) ** 2 + (((grid_x - mux) * np.sin(theta) +
-                   (grid_y - muy) * np.cos(theta)) / sigmay) ** 2))
+            val = np.exp(-0.5 * ((((grid_x - mux) * np.cos(theta) -
+                 (grid_y - muy) * np.sin(theta)) / sigmax) ** 2 + (((grid_x - mux) * np.sin(theta) +
+                 (grid_y - muy) * np.cos(theta)) / sigmay) ** 2)) # * 1/(sigmax * 2 * np.pi * sigmay)
+            return val
 
-        def measure_2D_NumInt_rotatable(mux, muy, sigmax, sigmay, theta, doas, refl):
-            def line_gaussian_rotatable2(sigmax, sigmay, theta, rx, ry, kx, ky, t):
-                theta = np.deg2rad(theta)
-                return 1 / (sigmax * 2 * np.pi * sigmay) * np.exp(-0.5 * ((((rx*t + kx) * np.cos(theta) - (ry*t + ky) * np.sin(
-                            theta)) / sigmax) ** 2 + (((rx*t + kx) * np.sin(theta) + (ry*t + ky) * np.cos(theta)) / sigmay) ** 2))
 
-            rx, ry = [refl[0] - doas[0], refl[1] - doas[1]]
-            kx, ky = [doas[0] - mux, doas[1] - muy]
-            field = gaussian_rotatable2(mux, muy, sigmax, sigmay, theta)
 
-        def integr_gaussian(mux, muy, sigmax, sigmay, doas, refl):
+        def measure_2D_NumInt(field, doas, refl, mode, show=False, field_params=None):
+            x1,x0,y1,y0 = [refl[0], doas[0], refl[1], doas[1]]
+            length = int(np.hypot(x1 - x0, y1 - y0))*100
+            x, y = np.linspace(x0, x1, length), np.linspace(y0, y1, length)
+            if mode == "Testing":
+                mux, muy, sigmax, sigmay = field_params
+                ana_val, ana_arr = integr_gaussian(mux, muy, sigmax, sigmay, doas, refl, full=True)
+                plt.style.use(['science', 'no-latex'])
+                zi = scipy.ndimage.map_coordinates(field, np.vstack((x, y)))
+                fig, axes = plt.subplots(nrows=2, figsize=(5, 10))
+
+                axes[0].imshow(field.T, cmap="inferno")
+                axes[0].plot([x0, x1], [y0, y1], 'wo-')
+                axes[0].axis('image')
+                axes[1].plot(zi, label="Cubic Interp.")
+
+                zi_NN = field[x.astype(np.int), y.astype(np.int)]
+                plt.title(f"Cub: {round(np.sum(zi), 3)}, NN: {round(np.sum(zi_NN), 3)}, Ana: {round(np.sum(ana_val), 3)}")
+                axes[1].plot(zi_NN, label="Nearest Neighb. Interp.")
+                plt.grid(alpha=0.3)
+                plt.legend()
+                #plt.show()
+                print(f"Cub: {round(np.sum(zi), 3)}, NN: {round(np.sum(zi_NN), 3)}, Ana: {round(np.sum(ana_val), 3)}")
+                return np.sum(zi_NN)
+
+            elif mode == "cubic":
+                zi = scipy.ndimage.map_coordinates(field, np.vstack((x,y)))
+                #mux, muy, sigmax, sigmay = field_params
+                #ana_val, ana_arr = integr_gaussian(mux, muy, sigmax, sigmay, doas, refl, full=True)
+                #print(f"[{round(ana_val, 3)}, {round(np.sum(zi)/100, 3)}],")
+                if show:
+                    fig, axes = plt.subplots(nrows=2)
+                    axes[0].imshow(field.T, cmap="inferno")
+                    axes[0].plot([x0, x1], [y0, y1], 'wo-')
+                    axes[0].axis('image')
+                    axes[1].plot(zi)
+                    plt.show()
+                return np.sum(zi)/100
+
+            elif mode == "direct":
+                zi = field[x.astype(np.int), y.astype(np.int)]
+                if show:
+                    fig, axes = plt.subplots(nrows=2)
+                    axes[0].imshow(field.T, cmap="inferno")
+                    axes[0].plot([x0, x1], [y0, y1], 'wo-')
+                    axes[0].axis('image')
+                    axes[1].plot(zi)
+                    plt.show()
+                return np.sum(zi)
+
+        def integr_gaussian(mux, muy, sigmax, sigmay, doas, refl, full=False):
             """
             Integrated Multivariate Gaussian function.
             :param mux: mu in x-direction
@@ -275,8 +311,10 @@ class Measurement_Devices:
             kx, ky = [doas[0]-mux, doas[1]-muy]
             C = np.sqrt(rx**2+ry**2) /(2*np.sqrt(rx**2*sigmay**2 + ry**2*sigmax**2)) * \
                 np.exp(-(ky*rx - kx*ry)**2 / (2*(rx**2*sigmay**2 + ry**2*sigmax**2)))
-
-            return (custom_erf(1) - custom_erf(0)) * C * (np.sqrt(2*np.pi)*sigmay*sigmax)
+            if not full:
+                return (custom_erf(1) - custom_erf(0)) * C * (np.sqrt(2*np.pi)*sigmay*sigmax)
+            else:
+                return (custom_erf(1) - custom_erf(0)) * C * (np.sqrt(2 * np.pi) * sigmay * sigmax), [custom_erf(t) * C * (np.sqrt(2 * np.pi) * sigmay * sigmax) for t in np.linspace(0,29,30)]
 
         def get_numerical_measurements(mux, muy, sigmax, sigmay, lines, doas, refl):
             weights_total = np.zeros(self.normalized_field.shape)
@@ -294,7 +332,6 @@ class Measurement_Devices:
                         if x > 0 and y > 0:
                             vol[x, y] = 1
                     j += 1
-
                     print(f"Doas {doas.ID} to Reflector {refl[i].ID}: {round(integr_gaussian(mux, muy, sigmax, sigmay, doas.position, refl[i].position), 5)} ppb")
                     weights = vol * integr_gaussian(mux, muy, sigmax, sigmay, doas.position, refl[i].position)
                     weights_total += weights
@@ -304,61 +341,96 @@ class Measurement_Devices:
             grid_x, grid_y = np.mgrid[0:29:30j, 0:29:30j]
             return A * np.exp(-(((grid_x - mux) ** 2 / (2 * sigmax ** 2)) + ((grid_y - muy) ** 2 / (2 * sigmay ** 2))))
 
+        def get_number_of_gaussians(number_of_doas, number_of_refl):
+            #print(f"# Doas {number_of_doas}, # Refl {number_of_refl} -> {int((number_of_doas * number_of_refl)/5)} gaussians")
+            return int((number_of_doas * number_of_refl)/5)
 
+        def get_dict_of_gaussian_params(number_of_gaussians):
+            gaussian_params = {}
+            for i in range(number_of_gaussians):
+                mus_x = "mux%d" % i
+                mus_y = "muy%d" % i
+                sigmas_x = "sigmax%d" % i
+                sigmas_y = "sigmay%d" % i
+                thetas = "theta%d" % i
+                gaussian_params[mus_x] = np.random.randint(1, 28)
+                gaussian_params[mus_y] = np.random.randint(1, 28)
+                gaussian_params[sigmas_x] = np.random.randint(2, 10)
+                gaussian_params[sigmas_y] = np.random.randint(2, 10)
+                gaussian_params[thetas] = np.random.randint(0, 359)
+            print(f"Fittable Gaussian Parameters: {gaussian_params}")
+            return gaussian_params
 
-
+        def create_param_bounds(number_of_gaussians, mu_min, mu_max, sigma_min, sigma_max, theta_min, theta_max):
+            return_list = []
+            for i in range(number_of_gaussians):
+                return_list.append((mu_min, mu_max))
+                return_list.append((mu_min, mu_max))
+                return_list.append((sigma_min, sigma_max))
+                return_list.append((sigma_min, sigma_max))
+                return_list.append((theta_min, theta_max))
+            print(return_list)
+            return return_list
 
         def diff(params, *args):
-            mux, muy, sigmax, sigmay = params
+            if len(params) == 4:
+                mux, muy, sigmax, sigmay = params
             try:
                 doas, refl, measurements, proove_arr, numerical = args
             except:
                 doas, refl, measurements, proove_arr, numerical = args[0]
-
             if not numerical:
                 diff_arr = []
                 y=0
                 for doas in doas:
                     for i in range(len(refl)):
                         sim_meas = integr_gaussian(mux, muy, sigmax, sigmay, doas.position, refl[i].position)
-                        diff_arr.append(abs(measurements[y] - sim_meas) ** 3)
+                        diff_arr.append(abs(measurements[y] - sim_meas) ** 5)
                         y+=1
                 cost_func_vals_ana.append(np.sum(diff_arr))
                 return np.sum(diff_arr)
             else:
                 diff_arr = []
-                for i in range(len(measurements)):
-                    sim_meas = measure_2D_num(gaussian(mux, muy, sigmax, sigmay))[0]
-                    diff_arr.append(abs(measurements[i] - sim_meas[i]) ** 3)
+                y = 0
+                for doas in doas:
+                    for i in range(len(refl)):
+                        field = np.zeros(self.normalized_field.shape)
+                        for k in range(get_number_of_gaussians(len(self.DOAS_devices), len(self.Reflectors))):
+                            field += gaussian_rotatable(params[k*5+0], params[k*5+1], params[k*5+2], params[k*5+3], params[k*5+4])
+                        sim_meas = measure_2D_NumInt(field, doas.position, refl[i].position, "cubic", show=False, field_params=None)
+                        diff_arr.append(abs(measurements[y] - sim_meas) ** 5)
+                        y += 1
                 cost_func_vals_num.append(np.sum(diff_arr))
-                if len(cost_func_vals_num)%10==0:
-                    print(f"Current diff val: {round(cost_func_vals_num[-1],3)}")
+                print(np.sum(diff_arr))
                 return np.sum(diff_arr)
 
         if show:
-
-            plt.imshow(gaussian_rotatable2(15, 15, 2, 7, -45))
-            plt.show()
+            number_of_gaussians = get_number_of_gaussians(len(self.DOAS_devices), len(self.Reflectors))
+            gaussian_params = get_dict_of_gaussian_params(number_of_gaussians)
 
             cost_func_vals_ana = []
             start_ana = time()
-            res_analytical = minimize(diff, np.array([10, 20, 6, 6]),
+            res_analytical = minimize(diff, np.array([10, 20, 3, 6]),
                                       args=[self.DOAS_devices, self.Reflectors, self.measurement, cost_func_vals_ana, False],
-                                      bounds=[(0,30), (0,30), (1,10), (1,10)])
+                                      bounds=[(1,28), (1,28), (1,10), (1,10)])
             end_ana = time()
             time_ana = end_ana-start_ana
             print(res_analytical)
-            mux_ana, muy_ana, sigmax_ana, sigmay_ana = res_analytical.x #[15, 15, 3, 3] #
+            mux_ana, muy_ana, sigmax_ana, sigmay_ana = res_analytical.x
 
             cost_func_vals_num = []
             start_num = time()
-            res_numerical = minimize(diff, np.array([10, 20, 6, 6]),
+
+            res_numerical = minimize(diff, np.array(list(gaussian_params.values())),
                                      args=[self.DOAS_devices, self.Reflectors, self.measurement, cost_func_vals_num, True],
-                                     bounds=[(0, 30), (0, 30), (1, 10), (1, 10)])
+                                     bounds=create_param_bounds(number_of_gaussians, 1, 28, 2, 10, 0, 359))
             end_num = time()
             time_num = end_num - start_num
             print(res_numerical)
-            mux_num, muy_num, sigmax_num, sigmay_num = res_numerical.x#[15, 15, 3, 3] #
+            num_resulting_field = np.zeros(self.normalized_field.shape)
+            for k in range(get_number_of_gaussians(len(self.DOAS_devices), len(self.Reflectors))):
+                num_resulting_field += gaussian_rotatable(res_numerical.x[k*4 + 0], res_numerical.x[k*4 + 1], res_numerical.x[k*4 + 2], res_numerical.x[k*4 + 3], res_numerical.x[k*4 + 4])
+
 
             plt.rcParams['text.usetex'] = True
             fig = plt.figure()
@@ -395,12 +467,12 @@ class Measurement_Devices:
             plt.title(r"$\chi^2$ analytical " + str(round(time_ana,5)) + "s")
 
             fig.add_subplot(337)
-            plt.imshow(gaussian(mux_num, muy_num, sigmax_num, sigmay_num), cmap="inferno")
+            plt.imshow(num_resulting_field, cmap="inferno")
             plt.colorbar()
             plt.title("Retrieved Field numerical")
 
             fig.add_subplot(338)
-            plt.imshow(measure_2D_num(gaussian(mux_num, muy_num, sigmax_num, sigmay_num))[1], cmap="inferno")
+            plt.imshow(measure_2D_num(num_resulting_field)[1], cmap="inferno")
             plt.colorbar()
             plt.title("Measurements Retr. Field numerical")
 
@@ -450,9 +522,9 @@ class Measurement_Devices:
             # Amplitude of field fluctuations
             'fluctuations': (1., 0.1),  # 1.0, 1e-2
             # Exponent of power law power spectrum component
-            'loglogavgslope': (-3., 0.5),  # -6.0, 1   (mean, std)
+            'loglogavgslope': (-4., 0.5),  # -6.0, 1   (mean, std)
             # Amplitude of integrated Wiener process power spectrum component
-            'flexibility': (0.5, 0.3),  # 1.0, 0.5
+            'flexibility': (0.2, 0.1),  # 1.0, 0.5
             # How ragged the integrated Wiener process component is
             'asperity': (0.5, 0.4)  # 0.1, 0.5
         }
@@ -476,14 +548,12 @@ class Measurement_Devices:
 
         # Specify noise
         data_space = R.target
-        noise = .001
+        noise = .1
         N = ift.ScalingOperator(data_space, noise, np.float64)
 
         # Generate mock signal and data
-        # Ich möchte normalized_field als mock field benutzen.
         # mock_position = ift.from_random(signal_response.domain, 'normal')
         ground_truth = ift.makeField(position_space, normalized_field)
-        # ground_truth = signal(ift.from_random(signal.domain))
 
         # plot = ift.Plot()
         # plot.add(R(ground_truth), title='Ground Truth', zmin=0, zmax=1)
@@ -493,12 +563,12 @@ class Measurement_Devices:
 
         # Minimization parameters
         ic_sampling = ift.AbsDeltaEnergyController(name="Sampling (linear)",
-                                                   deltaE=0.05, iteration_limit=100)
-        ic_newton = ift.AbsDeltaEnergyController(name='Newton', deltaE=0.5,
+                                                   deltaE=0.005, iteration_limit=100)
+        ic_newton = ift.AbsDeltaEnergyController(name='Newton', deltaE=0.05,
                                                  convergence_level=2, iteration_limit=35)
         minimizer = ift.NewtonCG(ic_newton)
         ic_sampling_nl = ift.AbsDeltaEnergyController(name='Sampling (nonlin)',
-                                                      deltaE=0.5, iteration_limit=15, convergence_level=2)
+                                                      deltaE=0.05, iteration_limit=15, convergence_level=2)
         minimizer_sampling = ift.NewtonCG(ic_sampling_nl)
 
         # Set up likelihood energy and information Hamiltonian
